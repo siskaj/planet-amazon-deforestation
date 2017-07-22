@@ -19,11 +19,6 @@ sys.path.append('../src')
 sys.path.append('../tests')
 
 
-# ## Import required modules
-
-# In[2]:
-
-import cv2
 import gc
 import numpy as np
 import pandas as pd
@@ -34,15 +29,12 @@ import data_helper
 #from keras_helper import AmazonKerasClassifier
 from src.xception_classifier import XceptionClassifier
 
-# get_ipython().magic('matplotlib inline')
-# get_ipython().magic("config InlineBackend.figure_format = 'retina'")
+#img_resize = (64, 64) # The resize size of each image
+img_resize = (74, 74)  # nova velikost potrebna pro XCeption model
+validation_split_size = 0.2
+epochs = 20
+batch_size = 128
 
-
-
-# ## Inspect image labels
-# Visualize what the training set looks like
-
-# In[4]:
 
 train_jpeg_dir, test_jpeg_dir, test_jpeg_additional, train_csv_file = data_helper.get_jpeg_data_files_paths()
 labels_df = pd.read_csv(train_csv_file)
@@ -58,47 +50,6 @@ from itertools import chain
 labels_list = list(chain.from_iterable([tags.split(" ") for tags in labels_df['tags'].values]))
 labels_set = set(labels_list)
 print("There is {} unique labels including {}".format(len(labels_set), labels_set))
-
-
-# ### Repartition of each labels
-
-# In[6]:
-
-# Histogram of label instances
-labels_s = pd.Series(labels_list).value_counts() # To sort them by count
-fig, ax = plt.subplots(figsize=(16, 8))
-sns.barplot(x=labels_s, y=labels_s.index, orient='h')
-
-
-# ## Images
-# Visualize some chip images to know what we are dealing with.
-# Lets vizualise 1 chip for the 17 images to get a sense of their differences.
-
-# In[7]:
-
-images_title = [labels_df[labels_df['tags'].str.contains(label)].iloc[i]['image_name'] + '.jpg' 
-                for i, label in enumerate(labels_set)]
-
-plt.rc('axes', grid=False)
-_, axs = plt.subplots(5, 4, sharex='col', sharey='row', figsize=(15, 20))
-axs = axs.ravel()
-
-for i, (image_name, label) in enumerate(zip(images_title, labels_set)):
-    img = cv2.imread(train_jpeg_dir + '/' + image_name, cv2.COLOR_BGR2RGB)
-    axs[i].imshow(img)
-    axs[i].set_title('{} - {}'.format(image_name, label))
-
-
-# # Define hyperparameters
-# Define the hyperparameters of our neural network
-
-# In[8]:
-
-#img_resize = (64, 64) # The resize size of each image
-img_resize = (72, 72)  # nova velikost potrebna pro XCeption model
-validation_split_size = 0.2
-epochs = 20
-batch_size = 128
 
 
 # # Data preprocessing
@@ -125,7 +76,7 @@ gc.collect();
 
 print("x_train shape: {}".format(x_train.shape))
 print("y_train shape: {}".format(y_train.shape))
-y_map
+print(y_map)
 
 
 # ## Create the neural network definition
@@ -137,9 +88,9 @@ y_map
 # classifier.add_flatten_layer()
 # classifier.add_ann_layer(len(y_map))
 
-classifier = XceptionClassifier()
+classifier = XceptionClassifier(image_size=img_resize[0])
 classifier.add_classification(len(y_map))
-train_losses, val_losses, fbeta_score = classifier.train_model(x_train, y_train, epochs, batch_size, validation_split_size=validation_split_size)
+train_losses, val_losses, train_acc, val_acc, fbeta_score = classifier.train_model(x_train, y_train, epochs, batch_size, validation_split_size=validation_split_size)
 
 
 # ## Monitor the results
@@ -150,14 +101,21 @@ train_losses, val_losses, fbeta_score = classifier.train_model(x_train, y_train,
 
 plt.plot(train_losses, label='Training loss')
 plt.plot(val_losses, label='Validation loss')
-plt.legend();
+plt.legend()
+plt.savefig('Losses.png')
+
+plt.clf()
+plt.plot(train_acc, label='Training accuracy')
+plt.plot(val_acc, label='Validation_accuracy')
+plt.legend()
+plt.savefig('Accuracy.png', transparent=False)
 
 
 # Look at our fbeta_score
 
 # In[13]:
 
-fbeta_score
+print("fbeta_score je - ", fbeta_score)
 
 
 # Before launching our predictions lets preprocess the test data and delete the old training data matrices
@@ -230,7 +188,7 @@ final_data = [[filename.split(".")[0], tags] for filename, tags in zip(x_test_fi
 # In[19]:
 
 final_df = pd.DataFrame(final_data, columns=['image_name', 'tags'])
-final_df.head()
+print("final.df_head - ",final_df.head())
 
 
 # In[20]:
