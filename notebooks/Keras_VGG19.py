@@ -166,8 +166,7 @@ for train_index, test_index in kf.split(df_train_data):
                             verbose=2,
                             callbacks=callbacks,
                             validation_data=valid_generator(),
-                            validation_steps=(len(df_valid) // batch_size) + 1,
-                            use_multiprocessing=True)
+                            validation_steps=(len(df_valid) // batch_size) + 1)
 
 
     def optimise_f2_thresholds(y, p, verbose=True, resolution=100):
@@ -225,6 +224,7 @@ for train_index, test_index in kf.split(df_train_data):
                 df_test_batch = df_test_data[start:end]
                 for f, tags in df_test_batch.values:
                     img = cv2.imread('input/test-jpg/{}.jpg'.format(f))
+#                    print('input/test-jpg/{}.jpg'.format(f))
                     img = cv2.resize(img, (input_size, input_size))
                     img = transformations(img, transformation)
                     x_batch.append(img)
