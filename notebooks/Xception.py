@@ -4,12 +4,12 @@ import numpy as np  # linear algebra
 import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
 
 from keras.models import Sequential
-from keras.layers import Dense, Flatten, BatchNormalization
+from keras.layers import Dense, Flatten, BatchNormalization, Dropout
 
 from keras.optimizers import Adam
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 
-from keras.applications.vgg19 import VGG19
+from keras.applications import Xception
 
 import cv2
 from tqdm import tqdm
@@ -28,8 +28,6 @@ n_folds = 5
 training = True
 
 ensemble_voting = False  # If True, use voting for model ensemble, otherwise use averaging
-
-validation_data_augmentation = False
 
 df_train_data = pd.read_csv('input/train_v2.csv')
 df_test_data = pd.read_csv('input/sample_submission_v2.csv')
@@ -81,7 +79,7 @@ for train_index, test_index in kf.split(df_train_data):
     print('Validating on {} samples'.format(len(df_valid)))
 
 
-    def valid_generator(augmentation=False):
+    def valid_generator():
         while True:
             for start in range(0, len(df_valid), batch_size):
                 x_batch = []
@@ -91,8 +89,7 @@ for train_index, test_index in kf.split(df_train_data):
                 for f, tags in df_valid_batch.values:
                     img = cv2.imread('input/train-jpg/{}.jpg'.format(f))
                     img = cv2.resize(img, (input_size, input_size))
-                    if augmentation:
-                        img = transformations(img, np.random.randint(6))
+                    img = transformations(img, np.random.randint(6))
                     targets = np.zeros(17)
                     for t in tags.split(' '):
                         targets[label_map[t]] = 1
@@ -129,17 +126,17 @@ for train_index, test_index in kf.split(df_train_data):
                 yield x_batch, y_batch
 
 
-    base_model = VGG19(include_top=False,
-                       weights='imagenet',
-                       input_shape=(input_size, input_size, input_channels))
-
+    base_model = Xception(include_top=False, weights='imagenet', input_tensor=None,
+                             input_shape=(image_size, image_size,3), pooling='avg')
+    base_model.trainable = False
     model = Sequential()
     # Batchnorm input
     model.add(BatchNormalization(input_shape=(input_size, input_size, input_channels)))
     # Base model
     model.add(base_model)
     # Classifier
-    model.add(Flatten())
+    model.add(Dense(2048, activation='relu'))
+    model.add(Dropout(0.5))
     model.add(Dense(17, activation='sigmoid'))
 
     opt = Adam(lr=1e-4)
@@ -158,7 +155,7 @@ for train_index, test_index in kf.split(df_train_data):
                                    patience=2,
                                    cooldown=2,
                                    verbose=1),
-                 ModelCheckpoint(filepath='weights/best_weights.fold_' + str(fold_count) + '.hdf5',
+                 ModelCheckpoint(filepath='weights_Xception_1layer/best_weights.fold_' + str(fold_count) + '.hdf5',
                                  save_best_only=True,
                                  save_weights_only=True)]
 
@@ -168,7 +165,7 @@ for train_index, test_index in kf.split(df_train_data):
                             epochs=epochs,
                             verbose=2,
                             callbacks=callbacks,
-                            validation_data=valid_generator(augmentation=validation_data_augmentation),
+                            validation_data=valid_generator(),
                             validation_steps=(len(df_valid) // batch_size) + 1)
 
 
@@ -198,9 +195,9 @@ for train_index, test_index in kf.split(df_train_data):
 
 
     # Load best weights_old
-    model.load_weights(filepath='weights/best_weights.fold_' + str(fold_count) + '.hdf5')
+    model.load_weights(filepath='weights_Xception_1layer/best_weights.fold_' + str(fold_count) + '.hdf5')
 
-    p_valid = model.predict_generator(generator=valid_generator(augmentation=validation_data_augmentation),
+    p_valid = model.predict_generator(generator=valid_generator(),
                                       steps=(len(df_valid) // batch_size) + 1)
 
     y_valid = []
@@ -212,14 +209,14 @@ for train_index, test_index in kf.split(df_train_data):
     y_valid = np.array(y_valid, np.uint8)
 
     # Find optimal f2 thresholds for local validation set
-    thres = optimise_f2_thresholds(y_valid, p_valid, verbose=True)
+    thres = optimise_f2_thresholds(y_valid, p_valid, verbose=False)
 
     print('F2 = {}'.format(fbeta_score(y_valid, np.array(p_valid) > thres, beta=2, average='samples')))
 
     thres_sum += np.array(thres, np.float32)
 
 
-    def test_generator(transformation=1, augmentation=False):
+    def test_generator(transformation):
         while True:
             for start in range(0, len(df_test_data), batch_size):
                 x_batch = []
@@ -229,27 +226,22 @@ for train_index, test_index in kf.split(df_train_data):
                     img = cv2.imread('input/test-jpg/{}.jpg'.format(f))
 #                    print('input/test-jpg/{}.jpg'.format(f))
                     img = cv2.resize(img, (input_size, input_size))
-                    if augmentation:
-                        img = transformations(img, transformation)
+                    img = transformations(img, transformation)
                     x_batch.append(img)
                 x_batch = np.array(x_batch, np.float32)
                 yield x_batch
 
-    if validation_data_augmentation:
-        # 6-fold TTA
-        p_full_test = []
-        for i in range(6):
-            p_test = model.predict_generator(generator=test_generator(transformation=i, augmentation=True),
-                                             steps=(len(df_test_data) // batch_size) + 1)
-            p_full_test.append(p_test)
-
-        p_test = np.array(p_full_test[0])
-        for i in range(1, 6):
-            p_test += np.array(p_full_test[i])
-        p_test /= 6
-    else:
-        p_test = model.predict_generator(generator=test_generator(augmentation=False),
+    # 6-fold TTA
+    p_full_test = []
+    for i in range(6):
+        p_test = model.predict_generator(generator=test_generator(transformation=i),
                                          steps=(len(df_test_data) // batch_size) + 1)
+        p_full_test.append(p_test)
+
+    p_test = np.array(p_full_test[0])
+    for i in range(1, 6):
+        p_test += np.array(p_full_test[i])
+    p_test /= 6
 
     y_full_test.append(p_test)
 
